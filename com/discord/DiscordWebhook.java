@@ -195,11 +195,7 @@ public final class DiscordWebhook
             throw new APIException("Failed to read attachment file: " + attachmentPath, e);
         }
 
-        String contentType = "application/octet-stream";
-        if (attachmentName.toLowerCase().endsWith(".png")) contentType = "image/png";
-        else if (attachmentName.toLowerCase().endsWith(".jpg") || attachmentName.toLowerCase().endsWith(".jpeg")) contentType = "image/jpeg";
-        else if (attachmentName.toLowerCase().endsWith(".pdf")) contentType = "application/pdf";
-        else if (attachmentName.toLowerCase().endsWith(".txt") || attachmentName.toLowerCase().endsWith(".log")) contentType = "text/plain";
+        var contentType = getString(attachmentName);
 
         // 2. Build Embed Object
         long embed = JSON.createObject();
@@ -265,19 +261,17 @@ public final class DiscordWebhook
         string.free(payloadJsonPtr);
 
         // 4. Build manual HTTP multipart body
-        StringBuilder part1 = new StringBuilder();
-        part1.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        part1.append("Content-Disposition: form-data; name=\"payload_json\"\r\n");
-        part1.append("Content-Type: application/json\r\n\r\n");
-        part1.append(payloadJson).append("\r\n");
+        String part1 = "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"payload_json\"\r\n" +
+                "Content-Type: application/json\r\n\r\n" +
+                payloadJson + "\r\n";
 
-        StringBuilder part2 = new StringBuilder();
-        part2.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        part2.append("Content-Disposition: form-data; name=\"files[0]\"; filename=\"").append(attachmentName).append("\"\r\n");
-        part2.append("Content-Type: ").append(contentType).append("\r\n\r\n");
+        String part2 = "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"files[0]\"; filename=\"" + attachmentName + "\"\r\n" +
+                "Content-Type: " + contentType + "\r\n\r\n";
 
-        byte[] part1Bytes = part1.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] part2Bytes = part2.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] part1Bytes = part1.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] part2Bytes = part2.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] closingBytes = ("\r\n--" + MULTIPART_BOUNDARY + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         long totalLen = part1Bytes.length + part2Bytes.length + fileBytes.length + closingBytes.length;
@@ -305,6 +299,16 @@ public final class DiscordWebhook
         }
     }
 
+    private static String getString(String attachmentName)
+    {
+        String contentType = "application/octet-stream";
+        if (attachmentName.toLowerCase().endsWith(".png")) contentType = "image/png";
+        else if (attachmentName.toLowerCase().endsWith(".jpg") || attachmentName.toLowerCase().endsWith(".jpeg")) contentType = "image/jpeg";
+        else if (attachmentName.toLowerCase().endsWith(".pdf")) contentType = "application/pdf";
+        else if (attachmentName.toLowerCase().endsWith(".txt") || attachmentName.toLowerCase().endsWith(".log")) contentType = "text/plain";
+        return contentType;
+    }
+
     /**
      * Sends a message with a text file attachment to a Discord Webhook.
      * Uses manual off-heap multipart/form-data formatting.
@@ -328,25 +332,25 @@ public final class DiscordWebhook
         string.free(payloadJsonPtr);
 
         // 2. Build manual HTTP multipart body
-        StringBuilder sb = new StringBuilder();
-        
+
         // JSON Part
-        sb.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        sb.append("Content-Disposition: form-data; name=\"payload_json\"\r\n");
-        sb.append("Content-Type: application/json\r\n\r\n");
-        sb.append(payloadJson).append("\r\n");
 
-        // File Part
-        sb.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        sb.append("Content-Disposition: form-data; name=\"files[0]\"; filename=\"").append(filename).append("\"\r\n");
-        sb.append("Content-Type: text/plain\r\n\r\n");
-        sb.append(fileContent).append("\r\n");
+        String sb = "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"payload_json\"\r\n" +
+                "Content-Type: application/json\r\n\r\n" +
+                payloadJson + "\r\n" +
 
-        // End Boundary
-        sb.append("--").append(MULTIPART_BOUNDARY).append("--\r\n");
+                // File Part
+                "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"files[0]\"; filename=\"" + filename + "\"\r\n" +
+                "Content-Type: text/plain\r\n\r\n" +
+                fileContent + "\r\n" +
+
+                // End Boundary
+                "--" + MULTIPART_BOUNDARY + "--\r\n";
 
         // 3. Allocate off-heap payload
-        long multipartPayloadPtr = string.allocate(sb.toString());
+        long multipartPayloadPtr = string.allocate(sb);
         long headersPtr = string.allocate("Content-Type: multipart/form-data; boundary=" + MULTIPART_BOUNDARY);
 
         try
@@ -406,19 +410,17 @@ public final class DiscordWebhook
         string.free(payloadJsonPtr);
 
         // 3. Formulate multipart components (as strings/bytes)
-        StringBuilder part1 = new StringBuilder();
-        part1.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        part1.append("Content-Disposition: form-data; name=\"payload_json\"\r\n");
-        part1.append("Content-Type: application/json\r\n\r\n");
-        part1.append(payloadJson).append("\r\n");
+        String part1 = "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"payload_json\"\r\n" +
+                "Content-Type: application/json\r\n\r\n" +
+                payloadJson + "\r\n";
 
-        StringBuilder part2 = new StringBuilder();
-        part2.append("--").append(MULTIPART_BOUNDARY).append("\r\n");
-        part2.append("Content-Disposition: form-data; name=\"files[0]\"; filename=\"").append(filename).append("\"\r\n");
-        part2.append("Content-Type: ").append(contentType).append("\r\n\r\n");
+        String part2 = "--" + MULTIPART_BOUNDARY + "\r\n" +
+                "Content-Disposition: form-data; name=\"files[0]\"; filename=\"" + filename + "\"\r\n" +
+                "Content-Type: " + contentType + "\r\n\r\n";
 
-        byte[] part1Bytes = part1.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] part2Bytes = part2.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] part1Bytes = part1.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] part2Bytes = part2.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] closingBytes = ("\r\n--" + MULTIPART_BOUNDARY + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         long totalLen = part1Bytes.length + part2Bytes.length + fileBytes.length + closingBytes.length;
