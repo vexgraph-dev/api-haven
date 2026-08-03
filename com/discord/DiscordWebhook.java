@@ -13,17 +13,27 @@ import primitive.string;
  * Formulates off-heap JSON payloads (text-only, embeds, text & binary file attachments)
  * and transmits them to Discord servers using the FFM libcurl HTTPClient.
  */
+// [comment]
+// High-performance zero-GC Discord Webhook
+// transmitter supporting text, embeds, and binary file uploads
 @Draft
-@Intention("High-performance zero-GC Discord Webhook transmitter supporting text, embeds, and binary file uploads")
+@Intention("[comment]")
 public final class DiscordWebhook
 {
     private static final String MULTIPART_BOUNDARY = "----AntiEngineBoundary7MA4";
 
     private DiscordWebhook() {}
 
+    // [String implementation]
+    // the thing is that the String is a single allocation
+    // as a test/placeholder in order to make the apis work
+    // by communicating it, albeit its disgusting
+    // (personally lol) but its okay
+
     /**
      * Sends a simple text-only message to a Discord Webhook.
      */
+    @Intention("[String implementation] line 27")
     public static void sendText(String webhookUrl, String content, String username, String avatarUrl)
     {
         if (webhookUrl == null || webhookUrl.isEmpty())
@@ -43,6 +53,7 @@ public final class DiscordWebhook
     /**
      * Sends a rich embed message to a Discord Webhook.
      */
+    @Intention("[String implementation] line 27")
     public static void sendEmbed(
         String webhookUrl, String content, String username, String avatarUrl,
         String embedTitle, String embedDesc, int color, String imageUrl
@@ -84,6 +95,7 @@ public final class DiscordWebhook
     /**
      * Sends a highly customized premium embed card to a Discord Webhook.
      */
+    @Intention("[String implementation] line 27")
     public static void sendRichEmbed(
         String webhookUrl, String content, String username, String avatarUrl,
         String title, String description, int color, 
@@ -165,6 +177,7 @@ public final class DiscordWebhook
      * Sends a highly customized premium embed card with a binary file attachment to a Discord Webhook.
      * The file is attached and can be referenced in the embed using "attachment://filename.ext".
      */
+    @Intention("[String implementation] line 27")
     public static void sendEmbedWithFile(
         String webhookUrl, String content, String username, String avatarUrl,
         String title, String description, int color, 
@@ -281,10 +294,10 @@ public final class DiscordWebhook
         long currentPtr = multipartBodyPtr;
 
         // Copy segments to off-heap buffer
-        for (byte b : part1Bytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : part2Bytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : fileBytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : closingBytes) ForeignMemory.putByte(currentPtr++, b);
+        for (byte b : part1Bytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : part2Bytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : fileBytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : closingBytes) ForeignMemory.unsafeSet(currentPtr++, b);
 
         long headersPtr = string.allocate("Content-Type: multipart/form-data; boundary=" + MULTIPART_BOUNDARY);
 
@@ -299,6 +312,7 @@ public final class DiscordWebhook
         }
     }
 
+    @Intention("[String implementation] line 27")
     private static String getString(String attachmentName)
     {
         String contentType = "application/octet-stream";
@@ -313,6 +327,7 @@ public final class DiscordWebhook
      * Sends a message with a text file attachment to a Discord Webhook.
      * Uses manual off-heap multipart/form-data formatting.
      */
+    @Intention("[String implementation] line 27")
     public static void sendTextFile(
         String webhookUrl, String content, String username, String avatarUrl,
         String filename, String fileContent
@@ -368,6 +383,7 @@ public final class DiscordWebhook
      * Sends a message with a binary file attachment (like PNG, PDF) to a Discord Webhook.
      * Packages the binary contents safely off-heap with a custom multipart body.
      */
+    @Intention("[String implementation] line 27")
     public static void sendFile(
         String webhookUrl, String content, String username, String avatarUrl,
         String filePath
@@ -430,10 +446,10 @@ public final class DiscordWebhook
         long currentPtr = multipartBodyPtr;
 
         // Copy segments to off-heap buffer
-        for (byte b : part1Bytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : part2Bytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : fileBytes) ForeignMemory.putByte(currentPtr++, b);
-        for (byte b : closingBytes) ForeignMemory.putByte(currentPtr++, b);
+        for (byte b : part1Bytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : part2Bytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : fileBytes) ForeignMemory.unsafeSet(currentPtr++, b);
+        for (byte b : closingBytes) ForeignMemory.unsafeSet(currentPtr++, b);
 
         long headersPtr = string.allocate("Content-Type: multipart/form-data; boundary=" + MULTIPART_BOUNDARY);
 
@@ -451,6 +467,7 @@ public final class DiscordWebhook
     /**
      * Performs direct HTTP POST downcall using FFM libcurl.
      */
+    @Intention("[String implementation] line 27")
     private static void transmit(String url, long payloadPtr, long headersPtr, long bodyLen)
     {
         long resPtr = 0L;
