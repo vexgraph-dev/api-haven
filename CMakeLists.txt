@@ -15,20 +15,27 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Header-only until the first port lands; switch to STATIC with sources
 # as files arrive.
 if(NOT TARGET api_haven)
-add_library(api_haven INTERFACE)
-target_include_directories(api_haven INTERFACE src)
-target_compile_options(api_haven INTERFACE -Wall -Wextra -Werror -mcpu=native)
+add_library(api_haven STATIC
+    src/api/client.c
+)
+target_include_directories(api_haven PUBLIC src)
+target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror -mcpu=native)
 
-option(API_HAVEN_USE_VEXSPOKE "Depend on vexspoke core via FetchContent" OFF)
-if(API_HAVEN_USE_VEXSPOKE)
-    include(FetchContent)
-    FetchContent_Declare(
-        vexspoke
-        GIT_REPOSITORY https://github.com/vexgraph-dev/vexspoke.git
-        GIT_TAG main
-    )
-    FetchContent_MakeAvailable(vexspoke)
-    target_include_directories(api_haven INTERFACE ${vexspoke_SOURCE_DIR}/src)
+if(TARGET vexspoke)
+    target_link_libraries(api_haven PUBLIC vexspoke)
+else()
+    option(API_HAVEN_USE_VEXSPOKE "Depend on vexspoke core via FetchContent" OFF)
+    if(API_HAVEN_USE_VEXSPOKE)
+        include(FetchContent)
+        FetchContent_Declare(
+            vexspoke
+            GIT_REPOSITORY https://github.com/vexgraph-dev/vexspoke.git
+            GIT_TAG main
+        )
+        FetchContent_MakeAvailable(vexspoke)
+        target_include_directories(api_haven PUBLIC ${vexspoke_SOURCE_DIR}/src)
+        target_link_libraries(api_haven PUBLIC vexspoke)
+    endif()
 endif()
 endif() # NOT TARGET api_haven
 
