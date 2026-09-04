@@ -4,6 +4,16 @@ project(api_haven C)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Release: dead-code stripping so unused symbols cost zero bytes in artifacts.
+# (Duplicated per repo for standalone builds; harmless when built in-tree.)
+if(APPLE)
+    add_compile_options($<$<CONFIG:Release>:-ffunction-sections> $<$<CONFIG:Release>:-fdata-sections>)
+    add_link_options($<$<CONFIG:Release>:-Wl,-dead_strip>)
+elseif(UNIX)
+    add_compile_options($<$<CONFIG:Release>:-ffunction-sections> $<$<CONFIG:Release>:-fdata-sections>)
+    add_link_options($<$<CONFIG:Release>:-Wl,--gc-sections>)
+endif()
+
 # C-transition seam for the Java API surface at the repo root
 # (APIClient.java, com/discord/DiscordWebhook.java).
 #
