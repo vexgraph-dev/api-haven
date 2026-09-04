@@ -13,6 +13,7 @@
 /**
  * ============================================================================
  * CLASS: DiscordWebhook (com/discord/discord)
+ * LEVEL: L2 — Behavior (webhook client API surface)
  * ============================================================================
  * High-performance, zero-allocation Discord Webhook API for the VexGraph engine.
  * Formulates off-heap JSON payloads (text-only and rich embeds) and transmits
