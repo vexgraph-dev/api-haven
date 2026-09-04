@@ -17,9 +17,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 if(NOT TARGET api_haven)
 add_library(api_haven STATIC
     src/api/client.c
+    src/com/discord/discord.c
 )
 target_include_directories(api_haven PUBLIC src)
-target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror -mcpu=native)
+target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
 
 if(TARGET vexspoke)
     target_link_libraries(api_haven PUBLIC vexspoke)
