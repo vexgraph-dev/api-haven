@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.3)
+cmake_minimum_required(VERSION 3.28)
 project(api_haven C)
 
 set(CMAKE_C_STANDARD 23)
@@ -14,6 +14,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 #
 # Header-only until the first port lands; switch to STATIC with sources
 # as files arrive.
+if(NOT TARGET api_haven)
 add_library(api_haven INTERFACE)
 target_include_directories(api_haven INTERFACE src)
 target_compile_options(api_haven INTERFACE -Wall -Wextra -Werror -mcpu=native)
@@ -29,8 +30,9 @@ if(API_HAVEN_USE_VEXSPOKE)
     FetchContent_MakeAvailable(vexspoke)
     target_include_directories(api_haven INTERFACE ${vexspoke_SOURCE_DIR}/src)
 endif()
+endif() # NOT TARGET api_haven
 
-# Port queue (Java -> C, in dependency order):
+# Port queue (Java => C, in dependency order):
 # 1. src/api/client.c — APIClient.sendTelemetry (needs net/http + net/json)
 # 2. src/api/discord.c — DiscordWebhook sendText/sendEmbed/sendRichEmbed/
 #    sendEmbedWithFile/sendTextFile/sendFile + transmit() (needs net/http
