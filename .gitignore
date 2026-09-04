@@ -1,1 +1,17 @@
 *.class
+
+### macOS ###
+.DS_Store
+
+### C build dirs ###
+build/
+build-debug/
+build-release/
+cmake-build-debug/
+cmake-build-release/
+out/
+
+### IDE ###
+.idea/
+*.iml
+.vscode/
