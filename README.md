@@ -1,4 +1,4 @@
-# api-haven, by Vex, truly.
+# api-haven
 
 Zero-allocation network endpoint schemas and off-heap API integration.
 
