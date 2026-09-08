@@ -1,0 +1,130 @@
+#include "api/rest.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "annotation/overview.h"
+#include "net/url.h"
+
+;;OVERVIEW
+/**
+ * ============================================================================
+ * CLASS: Rest (api/rest)
+ * LEVEL: L2 — Behavior (single REST core for api-haven drivers)
+ * ============================================================================
+ * URL parsing, auth injection, and HTTP transport in one place. Drivers
+ * hand over (url, auth, JSON body) and get back an HttpResponse in their
+ * own buffer. Canonical home of parseUrl (client.c / discord.c copies
+ * migrate here later per Rule 33).
+ *
+ * STRUCT FIELDS: none — procedural core over HttpRequest/HttpResponse.
+ *
+ * FUNCTION REGISTRY:
+ * ----------------------------------------------------------------------------
+ * Core Functions:
+ *   - Rest_postJson(url, auth, jsonBody, jsonLen, resp)
+ *   - Rest_get(url, auth, resp)
+ * ============================================================================
+ */
+
+static bool parseUrl(const char *url, char *scheme, size_t schemeCap,
+                     char *host, size_t hostCap, int *port,
+                     char *path, size_t pathCap) {
+    if (!url || url[0] == '\0')
+        return false;
+    const char *p = url;
+    const char *schemeEnd = strstr(p, "://");
+    if (schemeEnd) {
+        size_t sLen = (size_t)(schemeEnd - p);
+        if (sLen >= schemeCap)
+            return false;
+        memcpy(scheme, p, sLen);
+        scheme[sLen] = '\0';
+        p = schemeEnd + 3;
+    } else {
+        strncpy(scheme, "http", schemeCap - 1);
+        scheme[schemeCap - 1] = '\0';
+    }
+    *port = Url_defaultPort(scheme);
+    const char *slash = strchr(p, '/');
+    const char *colon = strchr(p, ':');
+    if (colon && (!slash || colon < slash)) {
+        size_t hLen = (size_t)(colon - p);
+        if (hLen >= hostCap)
+            return false;
+        memcpy(host, p, hLen);
+        host[hLen] = '\0';
+        *port = atoi(colon + 1);
+    } else if (slash) {
+        size_t hLen = (size_t)(slash - p);
+        if (hLen >= hostCap)
+            return false;
+        memcpy(host, p, hLen);
+        host[hLen] = '\0';
+    } else {
+        size_t hLen = strlen(p);
+        if (hLen >= hostCap)
+            return false;
+        memcpy(host, p, hLen);
+        host[hLen] = '\0';
+    }
+    if (slash) {
+        strncpy(path, slash, pathCap - 1);
+        path[pathCap - 1] = '\0';
+    } else {
+        strncpy(path, "/", pathCap - 1);
+        path[pathCap - 1] = '\0';
+    }
+    return true;
+}
+
+static bool perform(const char *url, const ApiAuth *auth, const char *method,
+                    const char *body, size_t bodyLen, HttpResponse *resp) {
+    if (!url || !method || !resp)
+        return false;
+    char scheme[16] = { 0 };
+    char host[256] = { 0 };
+    char path[512] = { 0 };
+    int port = 80;
+    if (!parseUrl(url, scheme, sizeof(scheme), host, sizeof(host), &port, path, sizeof(path)))
+        return false;
+    char authValue[512] = { 0 };
+    const char *authName = nullptr;
+    HttpHeader headers[3];
+    uint32_t headerCount = 0;
+    headers[headerCount].name = "Content-Type";
+    headers[headerCount].value = "application/json";
+    headerCount++;
+    if (auth && ApiAuth_apply(auth, &authName, authValue, sizeof(authValue))) {
+        headers[headerCount].name = authName;
+        headers[headerCount].value = authValue;
+        headerCount++;
+    }
+    headers[headerCount].name = "Connection";
+    headers[headerCount].value = "close";
+    headerCount++;
+    HttpRequest req = {
+        .scheme = scheme,
+        .method = method,
+        .host = host,
+        .port = port,
+        .path = path,
+        .headers = headers,
+        .headerCount = headerCount,
+        .body = body,
+        .bodyLen = bodyLen,
+        .timeoutMs = 5000
+    };
+    Http_perform(&req, resp);
+    return (*resp).ok;
+}
+
+// CORE FUNCTIONS
+bool Rest_postJson(const char *url, const ApiAuth *auth,
+                   const char *jsonBody, size_t jsonLen, HttpResponse *resp) {
+    return perform(url, auth, "POST", jsonBody, jsonLen, resp);
+}
+
+bool Rest_get(const char *url, const ApiAuth *auth, HttpResponse *resp) {
+    return perform(url, auth, "GET", nullptr, 0, resp);
+}

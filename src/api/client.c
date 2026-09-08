@@ -126,7 +126,10 @@ bool APIClient_sendTelemetry(const char *endpointUrl, const APIClientTelemetry *
         .timeoutMs = 5000
     };
 
-    HttpResponse resp = {0};
+    char respBody[2048];
+    HttpResponse resp = { 0 };
+    resp.body = respBody;
+    resp.bodyCap = sizeof(respBody);
     Http_perform(&req, &resp);
     return resp.ok && resp.status >= 200 && resp.status < 300;
 }

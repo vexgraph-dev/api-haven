@@ -157,7 +157,10 @@ bool DiscordWebhook_sendText(const char *webhookUrl, const char *content,
         .timeoutMs = 5000
     };
 
-    HttpResponse resp = {0};
+    char respBody[2048];
+    HttpResponse resp = { 0 };
+    resp.body = respBody;
+    resp.bodyCap = sizeof(respBody);
     Http_perform(&req, &resp);
     return resp.ok && resp.status >= 200 && resp.status < 300;
 }
@@ -273,7 +276,10 @@ bool DiscordWebhook_sendEmbed(const char *webhookUrl, const char *content,
         .timeoutMs = 5000
     };
 
-    HttpResponse resp = {0};
+    char respBody[2048];
+    HttpResponse resp = { 0 };
+    resp.body = respBody;
+    resp.bodyCap = sizeof(respBody);
     Http_perform(&req, &resp);
     return resp.ok && resp.status >= 200 && resp.status < 300;
 }

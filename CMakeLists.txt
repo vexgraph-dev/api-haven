@@ -27,7 +27,10 @@ endif()
 if(NOT TARGET api_haven)
 add_library(api_haven STATIC
     src/api/client.c
+    src/api/auth.c
+    src/api/rest.c
     src/com/discord/discord.c
+    src/com/slack/slack.c
 )
 target_include_directories(api_haven PUBLIC src)
 target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
@@ -55,3 +58,11 @@ endif() # NOT TARGET api_haven
 # 2. src/api/discord.c — DiscordWebhook sendText/sendEmbed/sendRichEmbed/
 #    sendEmbedWithFile/sendTextFile/sendFile + transmit() (needs net/http
 #    request with headers + bodyLen, io/file for attachments)
+
+# Shape-A/B loopback proof: headless, no accounts (server on 127.0.0.1).
+if(NOT TARGET webhook_loopback_test)
+    add_executable(webhook_loopback_test
+        src/tests/webhook_loopback_test.c
+    )
+    target_link_libraries(webhook_loopback_test PRIVATE api_haven)
+endif()
