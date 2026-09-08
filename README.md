@@ -25,7 +25,7 @@ This single, robust implementation serves as the production-proven architectural
 
 ## Workspace Integration & How to Use It
 
-`api-haven` sits at Layer 4 in the `@vexgraph-dev` vertical integration stack, depending directly on `vexspoke`:
+`api-haven` is an R2 feature in the supervisor order (Rule 17: `R0 hotcwap > R1 vexspoke > R1.5 graphvex > R2 features > R3 engines`), attaching to the R0 Kernel via callbacks. It depends directly on `vexspoke`:
 
 ```
 workspace/
