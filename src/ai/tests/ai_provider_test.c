@@ -180,6 +180,23 @@ int main(int argc, const char **argv) {
     CHECK(strcmp(AiChat_getApiKey(&c), "k2") == 0);
     CHECK(strcmp(AiChat_getBaseUrl(&c), "https://override") == 0);
 
+    // --- nous-research / Hermes support (chat-able through the directory) ----
+    const AiProviderSlot *nous = AiProvider_get(dir, "nous-research");
+    CHECK(nous != NULL);
+    CHECK(nous && strcmp(AiProvider_getDisplayName(dir, nous), "Nous Research") == 0);
+    CHECK(nous && AiProvider_getFamily(dir, nous) == AI_PROVIDER_FAMILY_OPENAI_COMPAT);
+    CHECK(nous && AiProvider_getAuth(dir, nous) == AI_PROVIDER_AUTH_BEARER);
+
+    AiChat hermes = AiChat_1("hermes"); // provider = shared; peer set below
+    AiChat_setPeer(&hermes, nous);
+    AiChat_setApiKey(&hermes, "nous-key");
+    CHECK(AiChat_buildRequest(&hermes, sMessages, 1,
+                              body, sizeof(body), url, sizeof(url), &auth));
+    CHECK(strcmp(url, "https://openrouter.ai/api/v1/chat/completions") == 0);
+    CHECK(auth.kind == API_AUTH_BEARER);
+    CHECK(strcmp(auth.credential, "nous-key") == 0);
+    CHECK(strstr(body, "hermes") != NULL);
+
     if (sFailures == 0) {
         printf("ai_provider_test: ALL CHECKS PASSED (%u providers)\n", total);
         return 0;
