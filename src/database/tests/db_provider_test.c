@@ -13,7 +13,9 @@
  * ============================================================================
  * Executable proof of the database data-source directory: row count,
  * slug/engine lookups, wire families and ports for representative rows,
- * positional access, and every null-safety guard.
+ * positional access, directory-wide invariants (unique slugs and display
+ * names, slug grammar, non-empty names/engines), and every null-safety
+ * guard.
  *
  * Exit code 0 = all checks green; 1 = at least one check failed.
  * ============================================================================
@@ -28,6 +30,23 @@ static int sFailures = 0;
             sFailures++;                                               \
         }                                                              \
     } while (0)
+
+// [a-z0-9]+(-[a-z0-9]+)* — canonical slug grammar (generator-enforced).
+static int isSlugValid(const char *slug) {
+    if (!slug || (*slug) == '\0')
+        return 0;
+    for (const char *p = slug; *p; p++) {
+        char c = *p;
+        int isAlnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (c == '-') {
+            if (p == slug || *(p + 1) == '\0' || *(p + 1) == '-')
+                return 0;
+        } else if (!isAlnum) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 int main(int argc, const char **argv) {
     (void)argc;
@@ -76,12 +95,27 @@ int main(int argc, const char **argv) {
     // --- positional + consistency ----------------------------------------------
     CHECK(DbProvider_at(db, 0) != NULL);
     CHECK(DbProvider_at(db, total) == NULL);
+    const char *names[25];
+    uint32_t nameCount = 0;
     for (uint32_t i = 0; i < total; i++) {
         const DbProviderSlot *row = DbProvider_at(db, i);
         CHECK(row != NULL);
-        CHECK(row && DbProvider_getSlug(db, row) != NULL);
-        CHECK(row && DbProvider_getDisplayName(db, row) != NULL);
-        CHECK(row && DbProvider_getEngine(db, row) != NULL);
+        CHECK(row && isSlugValid(DbProvider_getSlug(db, row)));
+        // slug uniqueness: get() must resolve every row back to itself
+        CHECK(row && DbProvider_get(db, DbProvider_getSlug(db, row)) == row);
+        const char *rowName = row ? DbProvider_getDisplayName(db, row) : NULL;
+        const char *rowEngine = row ? DbProvider_getEngine(db, row) : NULL;
+        CHECK(rowName && (*rowName) != '\0');
+        CHECK(rowEngine && (*rowEngine) != '\0');
+        if (row && rowName) {
+            int dup = 0;
+            for (uint32_t j = 0; j < nameCount; j++) {
+                if (strcmp(names[j], rowName) == 0)
+                    dup = 1;
+            }
+            CHECK(!dup); // menu-safe: no two rows share a display name
+            names[nameCount++] = rowName;
+        }
     }
 
     // --- null-safety (Rule 24) ------------------------------------------------
