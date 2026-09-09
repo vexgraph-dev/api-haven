@@ -13,9 +13,11 @@
  * LEVEL: L2 — Behavior verification (headless; no network, no accounts)
  * ============================================================================
  * Executable proof of the src/ai/ directory: exercises the AiProvider
- * table (count, at, get, resolve, null-safety, immutable getters) and the
- * AiChat buildRequest path (URL resolution, auth kind, JSON envelope
- * rendering) by parsing the generated body back with net/json.
+ * table (count, at, get, resolve, null-safety, immutable getters), the
+ * directory-wide invariants of the generated rows (unique slugs and
+ * display names, slug grammar, base-URL scheme/format), and the AiChat
+ * buildRequest path (URL resolution, auth kind, JSON envelope rendering)
+ * by parsing the generated body back with net/json.
  *
  * Zero HTTP: AiChat_complete is only asserted for its NULL-resp guard.
  * Exit code 0 = all checks green; 1 = at least one check failed.
@@ -36,6 +38,34 @@ static const AiMessage sMessages[2] = {
     {"user", "say \"hi\" \n to me"},
     {"assistant", "hello"},
 };
+
+// [a-z0-9]+(-[a-z0-9]+)* — canonical slug grammar (generator-enforced).
+static int isSlugValid(const char *slug) {
+    if (!slug || (*slug) == '\0')
+        return 0;
+    for (const char *p = slug; *p; p++) {
+        char c = *p;
+        int isAlnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (c == '-') {
+            if (p == slug || *(p + 1) == '\0' || *(p + 1) == '-')
+                return 0;
+        } else if (!isAlnum) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int hasWhitespace(const char *s) {
+    if (!s)
+        return 0;
+    for (const char *p = s; *p; p++) {
+        char c = *p;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f')
+            return 1;
+    }
+    return 0;
+}
 
 int main(int argc, const char **argv) {
     (void)argc;
@@ -77,6 +107,35 @@ int main(int argc, const char **argv) {
     CHECK(AiProvider_get(dir, "itera-compute") != NULL);
     CHECK(AiProvider_get(dir, "lilac") != NULL);
     CHECK(AiProvider_get(dir, "definitely-not-a-provider") == NULL);
+
+    // --- directory consistency (every row, generated-data invariants) --------
+    const char *names[280];
+    uint32_t nameCount = 0;
+    for (uint32_t i = 0; i < total; i++) {
+        const AiProviderSlot *row = AiProvider_at(dir, i);
+        CHECK(row != NULL);
+        CHECK(row && isSlugValid(AiProvider_getSlug(dir, row)));
+        // slug uniqueness: get() must resolve every row back to itself
+        CHECK(row && AiProvider_get(dir, AiProvider_getSlug(dir, row)) == row);
+        const char *rowName = row ? AiProvider_getDisplayName(dir, row) : NULL;
+        CHECK(rowName && (*rowName) != '\0');
+        if (row && rowName) {
+            int dup = 0;
+            for (uint32_t j = 0; j < nameCount; j++) {
+                if (strcmp(names[j], rowName) == 0)
+                    dup = 1;
+            }
+            CHECK(!dup); // menu-safe: no two rows share a display name
+            names[nameCount++] = rowName;
+            const char *base = AiProvider_getBaseUrl(dir, row);
+            if (base) {
+                CHECK(strncmp(base, "https://", 8) == 0 || strncmp(base, "http://", 7) == 0);
+                CHECK(!hasWhitespace(base));
+                size_t baseLen = strlen(base);
+                CHECK(baseLen > 0 && base[baseLen - 1] != '/');
+            }
+        }
+    }
 
     // --- family-default resolution on NULL-base rows -----------------------
     const AiProviderSlot *meta = AiProvider_get(dir, "meta");
