@@ -33,6 +33,9 @@ add_library(api_haven STATIC
     src/com/slack/slack.c
     src/ai/ai_provider.c
     src/ai/ai_chat.c
+    src/apps/app_detect.c
+    src/database/db_catalog.c
+    src/database/db_connector.c
 )
 target_include_directories(api_haven PUBLIC src)
 target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
@@ -76,4 +79,27 @@ if(NOT TARGET ai_provider_test)
         src/ai/tests/ai_provider_test.c
     )
     target_link_libraries(ai_provider_test PRIVATE api_haven)
+endif()
+
+# src/apps directory proof: PATH + /Applications detection, no exec.
+if(NOT TARGET app_detect_test)
+    add_executable(app_detect_test
+        src/apps/tests/app_detect_test.c
+    )
+    target_link_libraries(app_detect_test PRIVATE api_haven)
+endif()
+
+# src/database directory proof: catalog lookups + connector delegation.
+if(NOT TARGET db_catalog_test)
+    add_executable(db_catalog_test
+        src/database/tests/db_catalog_test.c
+    )
+    target_link_libraries(db_catalog_test PRIVATE api_haven)
+endif()
+
+if(NOT TARGET db_connector_test)
+    add_executable(db_connector_test
+        src/database/tests/db_connector_test.c
+    )
+    target_link_libraries(db_connector_test PRIVATE api_haven)
 endif()
