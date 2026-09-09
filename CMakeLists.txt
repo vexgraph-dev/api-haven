@@ -31,6 +31,8 @@ add_library(api_haven STATIC
     src/api/rest.c
     src/com/discord/discord.c
     src/com/slack/slack.c
+    src/ai/ai_provider.c
+    src/ai/ai_chat.c
 )
 target_include_directories(api_haven PUBLIC src)
 target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
@@ -65,4 +67,13 @@ if(NOT TARGET webhook_loopback_test)
         src/tests/webhook_loopback_test.c
     )
     target_link_libraries(webhook_loopback_test PRIVATE api_haven)
+endif()
+
+# src/ai directory proof: provider table + OpenAI-compatible envelope.
+# Headless: no network; buildRequest only (see ai_provider_test.c overview).
+if(NOT TARGET ai_provider_test)
+    add_executable(ai_provider_test
+        src/ai/tests/ai_provider_test.c
+    )
+    target_link_libraries(ai_provider_test PRIVATE api_haven)
 endif()
