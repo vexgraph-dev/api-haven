@@ -33,7 +33,6 @@ add_library(api_haven STATIC
     src/com/slack/slack.c
     src/ai/ai_provider.c
     src/ai/ai_chat.c
-    src/apps/app_detect.c
     src/database/db_provider.c
 )
 target_include_directories(api_haven PUBLIC src)
@@ -80,18 +79,19 @@ if(NOT TARGET ai_provider_test)
     target_link_libraries(ai_provider_test PRIVATE api_haven)
 endif()
 
-# src/apps directory proof: PATH + /Applications detection, no exec.
-if(NOT TARGET app_detect_test)
-    add_executable(app_detect_test
-        src/apps/tests/app_detect_test.c
-    )
-    target_link_libraries(app_detect_test PRIVATE api_haven)
-endif()
-
 # src/database directory proof: data-source descriptors, no drivers.
 if(NOT TARGET db_provider_test)
     add_executable(db_provider_test
         src/database/tests/db_provider_test.c
     )
     target_link_libraries(db_provider_test PRIVATE api_haven)
+endif()
+
+# Seam proof: vexspoke R1 probes (AppDetect, CaptureTool, ProcessProbe)
+# are consumed here for CLI/MCP work — never re-implemented (Rule 17).
+if(NOT TARGET probe_consumer_test)
+    add_executable(probe_consumer_test
+        src/tests/probe_consumer_test.c
+    )
+    target_link_libraries(probe_consumer_test PRIVATE api_haven)
 endif()

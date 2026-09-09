@@ -11,6 +11,7 @@
 //
 // defaultPort == 0 means embedded / SDK-only / N/A — no canonical wire port.
 // ============================================================================
+#pragma once
 static const DbProviderSlot kDbProviders[] = {
 
     {
