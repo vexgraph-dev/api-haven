@@ -34,8 +34,7 @@ add_library(api_haven STATIC
     src/ai/ai_provider.c
     src/ai/ai_chat.c
     src/apps/app_detect.c
-    src/database/db_catalog.c
-    src/database/db_connector.c
+    src/database/db_provider.c
 )
 target_include_directories(api_haven PUBLIC src)
 target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
@@ -89,17 +88,10 @@ if(NOT TARGET app_detect_test)
     target_link_libraries(app_detect_test PRIVATE api_haven)
 endif()
 
-# src/database directory proof: catalog lookups + connector delegation.
-if(NOT TARGET db_catalog_test)
-    add_executable(db_catalog_test
-        src/database/tests/db_catalog_test.c
+# src/database directory proof: data-source descriptors, no drivers.
+if(NOT TARGET db_provider_test)
+    add_executable(db_provider_test
+        src/database/tests/db_provider_test.c
     )
-    target_link_libraries(db_catalog_test PRIVATE api_haven)
-endif()
-
-if(NOT TARGET db_connector_test)
-    add_executable(db_connector_test
-        src/database/tests/db_connector_test.c
-    )
-    target_link_libraries(db_connector_test PRIVATE api_haven)
+    target_link_libraries(db_provider_test PRIVATE api_haven)
 endif()
