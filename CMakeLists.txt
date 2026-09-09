@@ -34,6 +34,7 @@ add_library(api_haven STATIC
     src/ai/ai_provider.c
     src/ai/ai_chat.c
     src/database/db_provider.c
+    src/mcp/mcp_server.c
 )
 target_include_directories(api_haven PUBLIC src)
 target_compile_options(api_haven PRIVATE -Wall -Wextra -Werror)
@@ -94,4 +95,20 @@ if(NOT TARGET probe_consumer_test)
         src/tests/probe_consumer_test.c
     )
     target_link_libraries(probe_consumer_test PRIVATE api_haven)
+endif()
+
+# Model Context Protocol: stdio JSON-RPC server executable + headless
+# protocol conformance test (mcp/mcp_server.c engine, mcp_main.c runner).
+if(NOT TARGET mcp_server)
+    add_executable(mcp_server
+        src/main/mcp_main.c
+    )
+    target_link_libraries(mcp_server PRIVATE api_haven)
+endif()
+
+if(NOT TARGET mcp_server_test)
+    add_executable(mcp_server_test
+        src/mcp/tests/mcp_server_test.c
+    )
+    target_link_libraries(mcp_server_test PRIVATE api_haven)
 endif()
