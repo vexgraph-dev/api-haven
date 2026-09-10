@@ -38,6 +38,7 @@ add_library(api_haven STATIC
     src/harness/harness.c
     src/app/app_provider.c
     src/app/app_broker.c
+    src/search/search_provider.c
     src/mcp/mcp_server.c
 )
 target_include_directories(api_haven PUBLIC src)
