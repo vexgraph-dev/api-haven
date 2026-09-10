@@ -3,13 +3,20 @@
 #include "mcp/mcp_server.h"
 
 #include "ai/ai_provider.h"
+#include "api/rest.h"
+#include "app/app_broker.h"
+#include "app/app_provider.h"
 #include "database/db_provider.h"
+#include "harness/engine_provider.h"
+#include "harness/harness.h"
 #include "net/json.h"
+#include "search/search_provider.h"
 #include "system/app_detect.h"
 #include "system/capture_tool.h"
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 ;;OVERVIEW
@@ -81,10 +88,43 @@
  *                          substring "query" (cap 20 matches)
  *   renderDbLookup(doc, argsRef, out, cap)     — db source by "slug",
  *                          "engine", or "query"; all rows when bare
+ *   renderEngineList(doc, argsRef, out, cap) — 20 engine rows (optional
+ *                          substring "query"); all rows when bare
+ *   renderHarnessRun(doc, argsRef, out, cap) — async spawn: "engine" +
+ *                          "prompt" (+ optional "timeoutMs") into a seam
+ *                          slot; answers job-id, never blocks stdio
+ *   renderHarnessPoll(doc, argsRef, out, cap) — "jobId" status line
+ *   renderAppList(doc, argsRef, out, cap)    — 29 app rows (optional
+ *                          "query"); all rows when bare
+ *   renderAppAction(doc, argsRef, out, cap)  — bounded action: "target" +
+ *                          "action" (+ optional "params", "timeoutMs");
+ *                          answers job-id + output, UNBOUND_DRIVER with
+ *                          no driver, BUSY_FULL when slots fill
+ *   renderAppPoll(doc, argsRef, out, cap)    — "jobId" stored verdict
+ *   renderSearchList(doc, argsRef, out, cap) — 3 search backends
+ *                          (optional "query"); all rows when bare
+ *   renderWebSearch(doc, argsRef, out, cap)  — live query: "query" (+
+ *                          optional "provider", "count", "base") via
+ *                          Rest_get (5s bound); honest TLS/key/transport
+ *                          errors, never scraped HTML
+ *   copyJsonString(doc, ref, out, cap)       — string view copy into a
+ *                          caller buffer (truncates past cap, NUL always)
+ *   stripHtmlTags(dst, dcap, src)            — drop <...> spans in place
+ *                          (MediaWiki snippets); always NUL-terminated
+ *   encodeQueryComponent(src, out, cap)      — percent-encode for ?q=
+ *                          (unreserved pass through, space ⇒ %20)
+ *   searchFamilyName / searchAuthName(...)   — enum→label maps
+ *   readNumberArg(doc, argsRef, key, outNum) — numeric arg; false when
+ *                          absent/not-a-number (args=-1 ⇒ false)
+ *   engineFamilyName / engineAuthName / appFamilyName / appAuthName(...) —
+ *                          enum→label maps with fallbacks
+ *   harnessStatusName / appStatusName(...) — slot verdict labels
+ *   ensureSeam()                             — latch-init the file-static
+ *                          Harness/AppBroker seam instances once
  *   findResource(uri)                          — resource table lookup
  * ============================================================================
- */
-;;INTENTION("protocol boundary: tools read registries/probes only — no exec, no writes; MCP input never triggers side effects in v1 (evidence-gathering surface)")
+  */
+;;INTENTION("protocol boundary: list/poll/catalog reads touch registries only — no side effects; run/action enqueue bounded driver work async (job-id, never blocks stdio) with per-call timeoutMs — no unbounded waits, no in-process exec (Rule 17 driver seam: UNBOUND_DRIVER until an R3 host binds)")
 ;;INTENTION("no pagination (cursor): the full small tables ship in one page; capabilities advertise no listChanged/subscriptions")
 ;;INTENTION("id echo is a raw token slice of the client line (numbers and strings, quotes preserved); null/missing id ⇒ notification, no response — per JSON-RPC 2.0")
 ;;INTENTION("privacy wall documented in renderCaptureStatus: macOS has no public API for other apps' ScreenCaptureKit sessions — liveness is the honest contract")
@@ -117,6 +157,22 @@ static bool renderAiLookup(const JsonDoc *doc, JsonRef args,
                            char *out, size_t cap);
 static bool renderDbLookup(const JsonDoc *doc, JsonRef args,
                            char *out, size_t cap);
+static bool renderEngineList(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap);
+static bool renderHarnessRun(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap);
+static bool renderHarnessPoll(const JsonDoc *doc, JsonRef args,
+                              char *out, size_t cap);
+static bool renderAppList(const JsonDoc *doc, JsonRef args,
+                          char *out, size_t cap);
+static bool renderAppAction(const JsonDoc *doc, JsonRef args,
+                            char *out, size_t cap);
+static bool renderAppPoll(const JsonDoc *doc, JsonRef args,
+                          char *out, size_t cap);
+static bool renderSearchList(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap);
+static bool renderWebSearch(const JsonDoc *doc, JsonRef args,
+                            char *out, size_t cap);
 
 // HOSTED TOOLS — the connector surface exposed to AI clients.
 static const McpToolSlot kMcpTools[] = {
@@ -168,6 +224,104 @@ static const McpToolSlot kMcpTools[] = {
         "\"case-insensitive substring\"}},\"additionalProperties\":false}",
         renderDbLookup,
     },
+    {
+        "engine_list",
+        "CLI coding-engine directory: 20 engines (claude-code, codex, "
+        "opencode, aider, pi, goose, cursor-cli, hermes, ...) with CLI "
+        "binary, transport family, and auth scheme. Optional substring "
+        "query; bare call lists all.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\","
+        "\"description\":\"case-insensitive substring over "
+        "slug/display/cli\"}},\"additionalProperties\":false}",
+        renderEngineList,
+    },
+    {
+        "harness_run",
+        "Spawn one bounded engine job: engine slug + prompt (+ optional "
+        "timeoutMs, default 100ms) into a 16-slot table. Answers a job-id "
+        "immediately and never blocks stdio — poll it with harness_poll. "
+        "UNBOUND_DRIVER until an R3 host binds a driver; BUSY_FULL when "
+        "all 16 slots run.",
+        "{\"type\":\"object\",\"properties\":{\"engine\":{\"type\":\"string\","
+        "\"description\":\"exact engine slug, e.g. codex\"},"
+        "\"prompt\":{\"type\":\"string\",\"description\":\"task text "
+        "(truncated past 32KiB)\"},\"timeoutMs\":{\"type\":\"number\","
+        "\"description\":\"per-job bound; omit for the seam default\"}},"
+        "\"required\":[\"engine\",\"prompt\"],\"additionalProperties\":false}",
+        renderHarnessRun,
+    },
+    {
+        "harness_poll",
+        "Job status check: numeric jobId from harness_run. Answers the "
+        "slot verdict (RUNNING/DONE/TIMEOUT/IDLE) without blocking.",
+        "{\"type\":\"object\",\"properties\":{\"jobId\":{\"type\":\"number\","
+        "\"description\":\"job id answered by harness_run\"}},"
+        "\"required\":[\"jobId\"],\"additionalProperties\":false}",
+        renderHarnessPoll,
+    },
+    {
+        "app_list",
+        "App/automation directory: 29 targets (apple-notes, spotify-local, "
+        "python, godot, telegram, slack, whatsapp, ...) with transport "
+        "family, auth scheme, and bundle/CLI/URL. Optional substring "
+        "query; bare call lists all.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\","
+        "\"description\":\"case-insensitive substring over "
+        "slug/display/target\"}},\"additionalProperties\":false}",
+        renderAppList,
+    },
+    {
+        "app_action",
+        "Run one bounded app action: target slug + action string (+ optional "
+        "params JSON text, timeoutMs). Answers job-id + driver output. "
+        "UNBOUND_DRIVER until an R3 host binds a driver; BUSY_FULL when "
+        "all 16 slots run.",
+        "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\","
+        "\"description\":\"exact app slug, e.g. apple-notes\"},"
+        "\"action\":{\"type\":\"string\",\"description\":\"action verb, "
+        "e.g. list-notes\"},\"params\":{\"type\":\"string\","
+        "\"description\":\"params JSON text; omit for {}\""
+        "},\"timeoutMs\":{\"type\":\"number\",\"description\":\"per-action "
+        "bound; omit for the seam default\"}},"
+        "\"required\":[\"target\",\"action\"],\"additionalProperties\":false}",
+        renderAppAction,
+    },
+    {
+        "app_poll",
+        "Action verdict check: numeric jobId from app_action. Answers the "
+        "stored slot verdict (DONE/TIMEOUT/RUNNING/IDLE) without blocking.",
+        "{\"type\":\"object\",\"properties\":{\"jobId\":{\"type\":\"number\","
+        "\"description\":\"job id answered by app_action\"}},"
+        "\"required\":[\"jobId\"],\"additionalProperties\":false}",
+        renderAppPoll,
+    },
+    {
+        "search_list",
+        "Blessed web-search directory: 3 backends (searxng self-hosted, "
+        "google-cse, wikimedia) with wire family and auth scheme. "
+        "Optional substring query; bare call lists all. APIs only — "
+        "scraping HTML to fake search is out of scope by design.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\","
+        "\"description\":\"case-insensitive substring over "
+        "slug/display/endpoint\"}},\"additionalProperties\":false}",
+        renderSearchList,
+    },
+    {
+        "web_search",
+        "Live web search over a blessed API: query text (+ optional "
+        "provider slug defaulting to searxng, count 1-10 default 5, base "
+        "URL override for self-hosted SearXNG). Bounded 5s fetch, answers "
+        "title|url+snippet lines. Honest errors: missing keys, TLS-only "
+        "providers before the TLS backend lands, unreachable hosts.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\","
+        "\"description\":\"search text\"},\"provider\":{\"type\":\"string\","
+        "\"description\":\"exact backend slug, e.g. searxng\"},"
+        "\"count\":{\"type\":\"number\",\"description\":\"max results 1-10\"},"
+        "\"base\":{\"type\":\"string\",\"description\":\"SearXNG base URL "
+        "override, e.g. http://localhost:8888\"}},"
+        "\"required\":[\"query\"],\"additionalProperties\":false}",
+        renderWebSearch,
+    },
 };
 
 // HOSTED RESOURCES — plain-text registry dumps under stable URIs.
@@ -189,6 +343,24 @@ static const McpResourceSlot kMcpResources[] = {
         "Database data sources with complete driver support",
         "text/plain",
         renderDbLookup,
+    },
+    {
+        "engines://catalog",
+        "CLI coding engines (20 directory rows)",
+        "text/plain",
+        renderEngineList,
+    },
+    {
+        "apps://catalog",
+        "App/automation targets (29 directory rows)",
+        "text/plain",
+        renderAppList,
+    },
+    {
+        "search://providers",
+        "Blessed web-search backends (3 directory rows)",
+        "text/plain",
+        renderSearchList,
     },
 };
 
@@ -277,6 +449,180 @@ static const char *kindName(CaptureKind kind) {
     return "?";
 }
 
+static const char *engineFamilyName(EngineProviderFamily f) {
+    switch (f) {
+        case ENGINE_PROVIDER_FAMILY_CLI:    return "cli";
+        case ENGINE_PROVIDER_FAMILY_LOCAL:  return "local";
+        case ENGINE_PROVIDER_FAMILY_REMOTE: return "remote";
+    }
+    return "?";
+}
+
+static const char *engineAuthName(EngineProviderAuth a) {
+    switch (a) {
+        case ENGINE_PROVIDER_AUTH_NONE:    return "none";
+        case ENGINE_PROVIDER_AUTH_API_KEY: return "api-key";
+        case ENGINE_PROVIDER_AUTH_OAUTH:   return "oauth";
+        case ENGINE_PROVIDER_AUTH_SYSTEM:  return "system";
+    }
+    return "?";
+}
+
+static const char *appFamilyName(AppProviderFamily f) {
+    switch (f) {
+        case APP_PROVIDER_FAMILY_OSA_SCRIPT:    return "osa-script";
+        case APP_PROVIDER_FAMILY_SHORTCUTS_CLI: return "shortcuts-cli";
+        case APP_PROVIDER_FAMILY_MUSIC_LOCAL:   return "music-local";
+        case APP_PROVIDER_FAMILY_REST_WEBHOOK:  return "rest-webhook";
+        case APP_PROVIDER_FAMILY_LOCAL_SOCKET:  return "local-socket";
+        case APP_PROVIDER_FAMILY_NATIVE_CLI:    return "native-cli";
+    }
+    return "?";
+}
+
+static const char *appAuthName(AppProviderAuth a) {
+    switch (a) {
+        case APP_PROVIDER_AUTH_NONE:   return "none";
+        case APP_PROVIDER_AUTH_SYSTEM: return "system";
+        case APP_PROVIDER_AUTH_TOKEN:  return "token";
+    }
+    return "?";
+}
+
+static const char *harnessStatusName(HarnessStatus s) {
+    switch (s) {
+        case HARNESS_STATUS_IDLE:      return "IDLE";
+        case HARNESS_STATUS_RUNNING:   return "RUNNING";
+        case HARNESS_STATUS_DONE:      return "DONE";
+        case HARNESS_STATUS_TIMEOUT:   return "TIMEOUT";
+        case HARNESS_STATUS_BUSY_FULL: return "BUSY_FULL";
+    }
+    return "?";
+}
+
+static const char *appStatusName(AppStatus s) {
+    switch (s) {
+        case APP_STATUS_IDLE:      return "IDLE";
+        case APP_STATUS_RUNNING:   return "RUNNING";
+        case APP_STATUS_DONE:      return "DONE";
+        case APP_STATUS_TIMEOUT:   return "TIMEOUT";
+        case APP_STATUS_BUSY_FULL: return "BUSY_FULL";
+    }
+    return "?";
+}
+
+static const char *searchFamilyName(SearchProviderFamily f) {
+    switch (f) {
+        case SEARCH_FAMILY_SEARXNG:    return "searxng";
+        case SEARCH_FAMILY_GOOGLE_CSE: return "google-cse";
+        case SEARCH_FAMILY_MEDIAWIKI:  return "mediawiki";
+    }
+    return "?";
+}
+
+static const char *searchAuthName(SearchProviderAuth a) {
+    switch (a) {
+        case SEARCH_AUTH_NONE:   return "none";
+        case SEARCH_AUTH_KEY_CX: return "key-cx-env";
+    }
+    return "?";
+}
+
+// Copy a JSON string view into a caller buffer (NUL always, silent
+// truncation past cap). False on non-string refs or empty caps.
+static bool copyJsonString(const JsonDoc *doc, JsonRef ref,
+                           char *out, size_t cap) {
+    if (!out || cap == 0)
+        return false;
+    out[0] = '\0';
+    if (ref < 0 || Json_type(doc, ref) != JSON_STRING)
+        return false;
+    uint32_t len = 0;
+    const char *view = Json_string(doc, ref, &len);
+    if ((size_t)len >= cap)
+        len = (uint32_t)(cap - 1);
+    memcpy(out, view, len);
+    out[len] = '\0';
+    return true;
+}
+
+// Drop <...> spans in place (MediaWiki search snippets ship HTML).
+// Always NUL-terminated; never grows the text.
+static void stripHtmlTags(char *dst, size_t dcap, const char *src) {
+    if (!dst || dcap == 0)
+        return;
+    size_t o = 0;
+    bool inTag = false;
+    for (const char *p = src; *p && o + 1 < dcap; p++) {
+        if ((*p) == '<') {
+            inTag = true;
+            continue;
+        }
+        if ((*p) == '>') {
+            inTag = false;
+            continue;
+        }
+        if (!inTag)
+            dst[o++] = *p;
+    }
+    dst[o] = '\0';
+}
+
+// Percent-encode one query component: unreserved bytes pass through,
+// everything else becomes %XX (space ⇒ %20, never +). False when out
+// is too small — the caller degrades instead of sending a corrupt URL.
+static bool encodeQueryComponent(const char *src, char *out, size_t cap) {
+    static const char *hex = "0123456789ABCDEF";
+    if (!src || !out || cap == 0)
+        return false;
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)src; *p; p++) {
+        unsigned char c = *p;
+        bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                          c == '.' || c == '~';
+        if (unreserved) {
+            if (o + 1 >= cap)
+                return false;
+            out[o++] = (char)c;
+        } else {
+            if (o + 3 >= cap)
+                return false;
+            out[o++] = '%';
+            out[o++] = hex[(c >> 4) & 15];
+            out[o++] = hex[c & 15];
+        }
+    }
+    if (o >= cap)
+        return false;
+    out[o] = '\0';
+    return true;
+}
+
+// --- harness/app seam (file-static instances behind the bind seam) --------
+
+static Harness sHarnessJobs;
+static AppBroker sAppJobs;
+static bool sSeamReady;
+
+static void ensureSeam(void) {
+    if (sSeamReady)
+        return;
+    sHarnessJobs = Harness_0();
+    sAppJobs = AppBroker_0();
+    sSeamReady = true;
+}
+
+void McpServer_bindHarnessDriver(void *driverCtx, HarnessDriverTable table) {
+    ensureSeam();
+    Harness_setDriver(&sHarnessJobs, driverCtx, table);
+}
+
+void McpServer_bindAppDriver(void *driverCtx, AppDriverTable table) {
+    ensureSeam();
+    AppBroker_setDriver(&sAppJobs, driverCtx, table);
+}
+
 // --- string helpers ---------------------------------------------------------
 
 static bool containsFold(const char *haystack, const char *needle) {
@@ -332,6 +678,19 @@ static bool methodIs(const JsonDoc *doc, JsonRef method, const char *want) {
         return false;
     const size_t wl = strlen(want);
     return (size_t)len == wl && memcmp(s, want, wl) == 0;
+}
+
+// Copy one numeric argument from an args subobject. Returns false when
+// the member is absent or not a number (outNum untouched; args < 0 ⇒ false).
+static bool readNumberArg(const JsonDoc *doc, JsonRef args,
+                          const char *key, double *outNum) {
+    if (args < 0 || !outNum)
+        return false;
+    JsonRef v = Json_member(doc, args, key);
+    if (v < 0 || Json_type(doc, v) != JSON_NUMBER)
+        return false;
+    (*outNum) = Json_number(doc, v);
+    return true;
 }
 
 // Copy one string argument from an args subobject. Returns false when the
@@ -757,6 +1116,469 @@ static bool renderDbLookup(const JsonDoc *doc, JsonRef args,
     return true;
 }
 
+static bool renderEngineList(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap) {
+    size_t pos = 0;
+    EngineProvider *dir = EngineProvider_shared();
+    char query[128];
+    const bool haveQuery = readStringArg(doc, args, "query", query,
+                                         sizeof(query));
+    const uint32_t total = EngineProvider_count(dir);
+    appendFmt(out, cap, &pos, "ENGINES (%u) — slug | display | cli | family | auth\n",
+              total);
+    for (uint32_t i = 0; i < total; i++) {
+        const EngineProviderSlot *slot = EngineProvider_at(dir, i);
+        if (haveQuery && (*query) != '\0') {
+            const char *sl = EngineProvider_getSlug(dir, slot);
+            const char *display = EngineProvider_getDisplayName(dir, slot);
+            const char *cli = EngineProvider_getCliName(dir, slot);
+            if (!containsFold(sl, query) && !containsFold(display, query) &&
+                !containsFold(cli, query))
+                continue;
+        }
+        appendFmt(out, cap, &pos, "- %s | %s | %s | %s | %s\n",
+                  EngineProvider_getSlug(dir, slot),
+                  EngineProvider_getDisplayName(dir, slot),
+                  EngineProvider_getCliName(dir, slot),
+                  engineFamilyName(EngineProvider_getFamily(dir, slot)),
+                  engineAuthName(EngineProvider_getAuth(dir, slot)));
+    }
+    return true;
+}
+
+static bool renderHarnessRun(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap) {
+    size_t pos = 0;
+    ensureSeam();
+    EngineProvider *dir = EngineProvider_shared();
+    char slug[128];
+    static char prompt[32768];
+    double timeoutNum = 0;
+    const bool haveTimeout = readNumberArg(doc, args, "timeoutMs", &timeoutNum);
+    if (!readStringArg(doc, args, "engine", slug, sizeof(slug)) ||
+        (*slug) == '\0') {
+        appendStr(out, cap, &pos, "missing engine: pass an engine slug, e.g. codex");
+        return false;
+    }
+    const EngineProviderSlot *slot = EngineProvider_get(dir, slug);
+    if (!slot) {
+        appendFmt(out, cap, &pos, "unknown engine: %s", slug);
+        return false;
+    }
+    if (!readStringArg(doc, args, "prompt", prompt, sizeof(prompt)) ||
+        (*prompt) == '\0') {
+        appendStr(out, cap, &pos, "missing prompt: pass task text");
+        return false;
+    }
+    Harness_setEngine(&sHarnessJobs, slot);
+    uint64_t bound = 0;
+    if (haveTimeout && timeoutNum > 0)
+        bound = (uint64_t)timeoutNum;
+    uint32_t jobId = 0;
+    if (!Harness_run(&sHarnessJobs, prompt, strlen(prompt), bound, &jobId)) {
+        HarnessStatus verdict = Harness_getLastStatus(&sHarnessJobs);
+        if (verdict == HARNESS_STATUS_BUSY_FULL) {
+            appendStr(out, cap, &pos,
+                      "BUSY_FULL: all 16 harness slots RUNNING — "
+                      "poll an old job, then retry");
+            return false;
+        }
+        appendFmt(out, cap, &pos,
+                  "UNBOUND_DRIVER: engine '%s' (cli '%s') resolved, but no "
+                  "Harness driver is bound in this process — exec lives in "
+                  "vexspoke/R3 (McpServer_bindHarnessDriver); nothing spawned",
+                  EngineProvider_getSlug(dir, slot),
+                  EngineProvider_getCliName(dir, slot));
+        return false;
+    }
+    appendFmt(out, cap, &pos,
+              "job %u RUNNING engine=%s cli=%s — poll with harness_poll",
+              jobId, EngineProvider_getSlug(dir, slot),
+              EngineProvider_getCliName(dir, slot));
+    return true;
+}
+
+static bool renderHarnessPoll(const JsonDoc *doc, JsonRef args,
+                              char *out, size_t cap) {
+    size_t pos = 0;
+    ensureSeam();
+    double idNum = 0;
+    if (!readNumberArg(doc, args, "jobId", &idNum) || idNum <= 0 ||
+        idNum > HARNESS_MAX_JOBS) {
+        appendStr(out, cap, &pos, "unknown job: pass a jobId from harness_run");
+        return false;
+    }
+    uint32_t jobId = (uint32_t)idNum;
+    HarnessStatus st = Harness_poll(&sHarnessJobs, jobId);
+    const HarnessJob *job = NULL;
+    if (jobId >= 1) {
+        uint32_t count = Harness_getJobCount(&sHarnessJobs);
+        for (uint32_t i = 0; i < count; i++) {
+            const HarnessJob *cand = Harness_getJobAt(&sHarnessJobs, i);
+            if (cand && (*cand).jobId == jobId) {
+                job = cand;
+                break;
+            }
+        }
+    }
+    if (!job) {
+        appendFmt(out, cap, &pos, "unknown job: %u", jobId);
+        return false;
+    }
+    EngineProvider *dir = EngineProvider_shared();
+    const char *engineSlug = (*job).engine
+        ? EngineProvider_getSlug(dir, (*job).engine) : "?";
+    appendFmt(out, cap, &pos, "job %u: %s engine=%s", jobId,
+              harnessStatusName(st), engineSlug);
+    return true;
+}
+
+static bool renderAppList(const JsonDoc *doc, JsonRef args,
+                          char *out, size_t cap) {
+    size_t pos = 0;
+    AppProvider *dir = AppProvider_shared();
+    char query[128];
+    const bool haveQuery = readStringArg(doc, args, "query", query,
+                                         sizeof(query));
+    const uint32_t total = AppProvider_count(dir);
+    appendFmt(out, cap, &pos, "APPS (%u) — slug | display | family | auth | target\n",
+              total);
+    for (uint32_t i = 0; i < total; i++) {
+        const AppProviderSlot *slot = AppProvider_at(dir, i);
+        if (haveQuery && (*query) != '\0') {
+            const char *sl = AppProvider_getSlug(dir, slot);
+            const char *display = AppProvider_getDisplayName(dir, slot);
+            const char *target = AppProvider_getBundleIdOrScheme(dir, slot);
+            if (!containsFold(sl, query) && !containsFold(display, query) &&
+                !containsFold(target, query))
+                continue;
+        }
+        appendFmt(out, cap, &pos, "- %s | %s | %s | %s | %s\n",
+                  AppProvider_getSlug(dir, slot),
+                  AppProvider_getDisplayName(dir, slot),
+                  appFamilyName(AppProvider_getFamily(dir, slot)),
+                  appAuthName(AppProvider_getAuth(dir, slot)),
+                  AppProvider_getBundleIdOrScheme(dir, slot));
+    }
+    return true;
+}
+
+static bool renderAppAction(const JsonDoc *doc, JsonRef args,
+                            char *out, size_t cap) {
+    size_t pos = 0;
+    ensureSeam();
+    AppProvider *dir = AppProvider_shared();
+    char slug[128];
+    char action[128];
+    static char params[16384];
+    static char actionOut[16384];
+    double timeoutNum = 0;
+    const bool haveTimeout = readNumberArg(doc, args, "timeoutMs", &timeoutNum);
+    if (!readStringArg(doc, args, "target", slug, sizeof(slug)) ||
+        (*slug) == '\0') {
+        appendStr(out, cap, &pos,
+                  "missing target: pass an app slug, e.g. apple-notes");
+        return false;
+    }
+    const AppProviderSlot *slot = AppProvider_get(dir, slug);
+    if (!slot) {
+        appendFmt(out, cap, &pos, "unknown target: %s", slug);
+        return false;
+    }
+    if (!readStringArg(doc, args, "action", action, sizeof(action)) ||
+        (*action) == '\0') {
+        appendStr(out, cap, &pos, "missing action: pass an action verb");
+        return false;
+    }
+    params[0] = '\0';
+    readStringArg(doc, args, "params", params, sizeof(params));
+    const char *paramsText = (*params) != '\0' ? params : "{}";
+    AppBroker_setTarget(&sAppJobs, slot);
+    if (haveTimeout && timeoutNum > 0)
+        AppBroker_setTimeout(&sAppJobs, (uint64_t)timeoutNum);
+    uint32_t jobId = 0;
+    size_t outLen = 0;
+    bool ok = AppBroker_action(&sAppJobs, action, paramsText, strlen(paramsText),
+                               actionOut, sizeof(actionOut), &jobId);
+    if (!ok) {
+        AppStatus verdict = AppBroker_getLastStatus(&sAppJobs);
+        if (verdict == APP_STATUS_BUSY_FULL) {
+            appendStr(out, cap, &pos,
+                      "BUSY_FULL: all 16 app slots RUNNING — "
+                      "poll an old job, then retry");
+            return false;
+        }
+        if (verdict == APP_STATUS_TIMEOUT) {
+            appendFmt(out, cap, &pos, "job %u TIMEOUT target=%s action=%s",
+                      jobId, AppProvider_getSlug(dir, slot), action);
+            return false;
+        }
+        appendFmt(out, cap, &pos,
+                  "UNBOUND_DRIVER: target '%s' action '%s' resolved, but no "
+                  "App driver is bound in this process — exec lives in "
+                  "vexspoke/R3 (McpServer_bindAppDriver); nothing ran",
+                  AppProvider_getSlug(dir, slot), action);
+        return false;
+    }
+    const AppJob *job = NULL;
+    uint32_t count = AppBroker_getJobCount(&sAppJobs);
+    for (uint32_t i = 0; i < count; i++) {
+        const AppJob *cand = AppBroker_getJobAt(&sAppJobs, i);
+        if (cand && (*cand).jobId == jobId) {
+            job = cand;
+            outLen = (*cand).outLen;
+            break;
+        }
+    }
+    appendFmt(out, cap, &pos, "job %u DONE target=%s action=%s outLen=%zu\n",
+              jobId, AppProvider_getSlug(dir, slot), action, outLen);
+    (void)job;
+    appendStr(out, cap, &pos, actionOut);
+    return true;
+}
+
+static bool renderAppPoll(const JsonDoc *doc, JsonRef args,
+                          char *out, size_t cap) {
+    size_t pos = 0;
+    ensureSeam();
+    double idNum = 0;
+    if (!readNumberArg(doc, args, "jobId", &idNum) || idNum <= 0 ||
+        idNum > APP_MAX_JOBS) {
+        appendStr(out, cap, &pos, "unknown job: pass a jobId from app_action");
+        return false;
+    }
+    uint32_t jobId = (uint32_t)idNum;
+    AppStatus st = AppBroker_poll(&sAppJobs, jobId);
+    const AppJob *job = NULL;
+    uint32_t count = AppBroker_getJobCount(&sAppJobs);
+    for (uint32_t i = 0; i < count; i++) {
+        const AppJob *cand = AppBroker_getJobAt(&sAppJobs, i);
+        if (cand && (*cand).jobId == jobId) {
+            job = cand;
+            break;
+        }
+    }
+    if (!job) {
+        appendFmt(out, cap, &pos, "unknown job: %u", jobId);
+        return false;
+    }
+    AppProvider *dir = AppProvider_shared();
+    const char *targetSlug = (*job).target
+        ? AppProvider_getSlug(dir, (*job).target) : "?";
+    appendFmt(out, cap, &pos, "job %u: %s target=%s", jobId,
+              appStatusName(st), targetSlug);
+    return true;
+}
+
+static bool renderSearchList(const JsonDoc *doc, JsonRef args,
+                             char *out, size_t cap) {
+    size_t pos = 0;
+    SearchProvider *dir = SearchProvider_shared();
+    char query[128];
+    const bool haveQuery = readStringArg(doc, args, "query", query,
+                                         sizeof(query));
+    const uint32_t total = SearchProvider_count(dir);
+    appendFmt(out, cap, &pos,
+              "SEARCH PROVIDERS (%u) — slug | display | family | auth | endpoint\n",
+              total);
+    for (uint32_t i = 0; i < total; i++) {
+        const SearchProviderSlot *slot = SearchProvider_at(dir, i);
+        if (haveQuery && (*query) != '\0') {
+            const char *sl = SearchProvider_getSlug(dir, slot);
+            const char *display = SearchProvider_getDisplayName(dir, slot);
+            const char *ep = SearchProvider_getEndpoint(dir, slot);
+            if (!containsFold(sl, query) && !containsFold(display, query) &&
+                !containsFold(ep, query))
+                continue;
+        }
+        appendFmt(out, cap, &pos, "- %s | %s | %s | %s | %s\n",
+                  SearchProvider_getSlug(dir, slot),
+                  SearchProvider_getDisplayName(dir, slot),
+                  searchFamilyName(SearchProvider_getFamily(dir, slot)),
+                  searchAuthName(SearchProvider_getAuth(dir, slot)),
+                  SearchProvider_getEndpoint(dir, slot));
+    }
+    return true;
+}
+
+static bool renderWebSearch(const JsonDoc *doc, JsonRef args,
+                            char *out, size_t cap) {
+    size_t pos = 0;
+    SearchProvider *dir = SearchProvider_shared();
+    static char query[2048];
+    char slug[128];
+    char base[512];
+    double countNum = 0;
+    if (!readStringArg(doc, args, "query", query, sizeof(query)) ||
+        (*query) == '\0') {
+        appendStr(out, cap, &pos, "missing query: pass search text");
+        return false;
+    }
+    slug[0] = '\0';
+    readStringArg(doc, args, "provider", slug, sizeof(slug));
+    if ((*slug) == '\0') {
+        const char *dflt = "searxng";
+        size_t dl = strlen(dflt) + 1;
+        if (dl > sizeof(slug))
+            dl = sizeof(slug);
+        memcpy(slug, dflt, dl);
+    }
+    const SearchProviderSlot *slot = SearchProvider_get(dir, slug);
+    if (!slot) {
+        appendFmt(out, cap, &pos, "unknown search provider: %s", slug);
+        return false;
+    }
+    uint32_t want = 5;
+    if (readNumberArg(doc, args, "count", &countNum) && countNum >= 1) {
+        want = (uint32_t)countNum;
+        if (want > 10)
+            want = 10;
+    }
+    static char encoded[4096];
+    if (!encodeQueryComponent(query, encoded, sizeof(encoded))) {
+        appendStr(out, cap, &pos, "query too long to encode (4KiB cap)");
+        return false;
+    }
+
+    // --- build the backend URL (documented APIs only, never scraping) ---
+    static char url[2048];
+    url[0] = '\0';
+    SearchProviderFamily fam = SearchProvider_getFamily(dir, slot);
+    if (fam == SEARCH_FAMILY_SEARXNG) {
+        const char *ep = SearchProvider_getEndpoint(dir, slot);
+        base[0] = '\0';
+        if (readStringArg(doc, args, "base", base, sizeof(base)) &&
+            (*base) != '\0')
+            ep = base;
+        size_t bl = strlen(ep);
+        while (bl > 0 && ep[bl - 1] == '/')
+            bl--;
+        int n = snprintf(url, sizeof(url), "%.*s/search?q=%s&format=json",
+                         (int)bl, ep, encoded);
+        if (n <= 0 || (size_t)n >= sizeof(url)) {
+            appendStr(out, cap, &pos, "search URL overflow (2KiB cap)");
+            return false;
+        }
+    } else if (fam == SEARCH_FAMILY_GOOGLE_CSE) {
+        const char *key = getenv("GOOGLE_CSE_KEY");
+        const char *cx = getenv("GOOGLE_CSE_CX");
+        if (!key || (*key) == '\0' || !cx || (*cx) == '\0') {
+            appendStr(out, cap, &pos,
+                      "missing GOOGLE_CSE_KEY/GOOGLE_CSE_CX env: export both "
+                      "(never the repo, never the arena) and retry");
+            return false;
+        }
+        int n = snprintf(url, sizeof(url),
+                         "%s/customsearch/v1?key=%s&cx=%s&q=%s&num=%u",
+                         SearchProvider_getEndpoint(dir, slot),
+                         key, cx, encoded, want > 10 ? 10 : want);
+        if (n <= 0 || (size_t)n >= sizeof(url)) {
+            appendStr(out, cap, &pos, "search URL overflow (2KiB cap)");
+            return false;
+        }
+    } else {
+        int n = snprintf(url, sizeof(url),
+                         "%s/w/api.php?action=query&list=search&srsearch=%s"
+                         "&srlimit=%u&format=json",
+                         SearchProvider_getEndpoint(dir, slot),
+                         encoded, want);
+        if (n <= 0 || (size_t)n >= sizeof(url)) {
+            appendStr(out, cap, &pos, "search URL overflow (2KiB cap)");
+            return false;
+        }
+    }
+
+    // --- bounded fetch (Rest_get: 5s; caller-owned buffers, no alloc) ---
+    static char fetch[32768];
+    HttpResponse resp;
+    resp.body = fetch;
+    resp.bodyCap = sizeof(fetch);
+    resp.bodyLen = 0;
+    ApiAuth none = ApiAuth_none();
+    if (!Rest_get(url, &none, &resp) || !resp.ok) {
+        if (strncmp(url, "https://", 8) == 0) {
+            appendFmt(out, cap, &pos,
+                      "TLS_BACKEND_MISSING: '%s' needs https and this build "
+                      "speaks http:// only (no TLS backend yet) — use the "
+                      "searxng provider, or wait for the curl backend",
+                      SearchProvider_getSlug(dir, slot));
+            return false;
+        }
+        appendFmt(out, cap, &pos,
+                  "transport error: no response from '%s' (status %d) — "
+                  "is the backend up? SearXNG defaults to "
+                  "http://localhost:8888",
+                  SearchProvider_getSlug(dir, slot), resp.status);
+        return false;
+    }
+    if (resp.status != 200) {
+        appendFmt(out, cap, &pos, "provider HTTP %d from '%s'",
+                  resp.status, SearchProvider_getSlug(dir, slot));
+        return false;
+    }
+
+    // --- parse the documented JSON shape per family ---
+    JsonNode nodes[256];
+    static char scratch[65536];
+    JsonDoc rdoc;
+    if (!Json_parse(&rdoc, nodes, 256, scratch, sizeof(scratch), fetch)) {
+        appendFmt(out, cap, &pos,
+                  "provider '%s' returned non-JSON (first 80 bytes: %.80s)",
+                  SearchProvider_getSlug(dir, slot), fetch);
+        return false;
+    }
+    JsonRef items = -1;
+    const char *tKey = "title";
+    const char *uKey = "url";
+    const char *sKey = "content";
+    if (fam == SEARCH_FAMILY_SEARXNG) {
+        items = Json_member(&rdoc, Json_root(&rdoc), "results");
+    } else if (fam == SEARCH_FAMILY_GOOGLE_CSE) {
+        items = Json_member(&rdoc, Json_root(&rdoc), "items");
+        uKey = "link";
+        sKey = "snippet";
+    } else {
+        JsonRef q = Json_member(&rdoc, Json_root(&rdoc), "query");
+        if (q >= 0)
+            items = Json_member(&rdoc, q, "search");
+        sKey = "snippet";
+    }
+    uint32_t total = items >= 0 ? Json_count(&rdoc, items) : 0;
+    uint32_t shown = total < want ? total : want;
+    appendFmt(out, cap, &pos, "WEB SEARCH '%s' via %s — %u result%s (showing %u)\n",
+              query, SearchProvider_getSlug(dir, slot),
+              total, total == 1 ? "" : "s", shown);
+    if (total == 0)
+        return true;
+    static char title[256];
+    static char link[512];
+    static char snippet[1024];
+    static char plain[1024];
+    for (uint32_t i = 0; i < shown; i++) {
+        JsonRef item = Json_at(&rdoc, items, i);
+        title[0] = '\0';
+        link[0] = '\0';
+        snippet[0] = '\0';
+        if (item >= 0) {
+            copyJsonString(&rdoc, Json_member(&rdoc, item, tKey),
+                           title, sizeof(title));
+            copyJsonString(&rdoc, Json_member(&rdoc, item, uKey),
+                           link, sizeof(link));
+            copyJsonString(&rdoc, Json_member(&rdoc, item, sKey),
+                           snippet, sizeof(snippet));
+        }
+        const char *text = snippet;
+        if (fam == SEARCH_FAMILY_MEDIAWIKI) {
+            stripHtmlTags(plain, sizeof(plain), snippet);
+            text = plain;
+        }
+        appendFmt(out, cap, &pos, "- %s | %s\n  %s\n",
+                  (*title) != '\0' ? title : "(untitled)",
+                  (*link) != '\0' ? link : "(no url)", text);
+    }
+    return true;
+}
+
 // --- resource read ----------------------------------------------------------
 
 static const McpResourceSlot *findResource(const char *uri) {
@@ -795,10 +1617,12 @@ bool McpServer_handleLine(McpServer *self, const char *line, size_t lineLen,
 
     // Parse (failed parse => parse error). Note: line must be
     // NUL-terminated by the caller (in practice a read-line buffer).
-    JsonNode nodes[64];
-    char scratch[2048];
+    // Pools sized for run/action prompts: 256 nodes, 64KiB of decoded
+    // escapes (a 32KiB prompt with escapes must still fit).
+    JsonNode nodes[256];
+    char scratch[65536];
     JsonDoc doc;
-    if (!Json_parse(&doc, nodes, 64, scratch, sizeof(scratch), line)) {
+    if (!Json_parse(&doc, nodes, 256, scratch, sizeof(scratch), line)) {
         respondError(-32700, "Parse error", idS, outBuf, outCap);
         return true;
     }

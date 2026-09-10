@@ -14,8 +14,10 @@
  * ============================================================================
  * Exercises McpServer_handleLine against literal client frames:
  * initialize version negotiation (supported echo / latest fallback),
- * ping, tools/list (all 4 tools with schemas), tools/call success +
- * isError paths, resources/list + read, unknown tool/method/resource
+ * ping, tools/list (all 10 tools with schemas), tools/call success +
+ * isError paths (incl. engine_list/app_list, unbound harness_run /
+ * app_action degrade, poll of unknown jobs), resources/list + read
+ * (incl. engines/apps catalogs), unknown tool/method/resource
  * errors, batch rejection, notification silence, string-id echo, and
  * parse-error handling.
  *
@@ -87,6 +89,22 @@ int main(void) {
           "tool ai_provider_lookup present");
     check(strstr(out, "\"name\":\"db_data_source_lookup\"") != NULL,
           "tool db_data_source_lookup present");
+    check(strstr(out, "\"name\":\"engine_list\"") != NULL,
+          "tool engine_list present");
+    check(strstr(out, "\"name\":\"harness_run\"") != NULL,
+          "tool harness_run present");
+    check(strstr(out, "\"name\":\"harness_poll\"") != NULL,
+          "tool harness_poll present");
+    check(strstr(out, "\"name\":\"app_list\"") != NULL,
+          "tool app_list present");
+    check(strstr(out, "\"name\":\"app_action\"") != NULL,
+          "tool app_action present");
+    check(strstr(out, "\"name\":\"app_poll\"") != NULL,
+          "tool app_poll present");
+    check(strstr(out, "\"name\":\"search_list\"") != NULL,
+          "tool search_list present");
+    check(strstr(out, "\"name\":\"web_search\"") != NULL,
+          "tool web_search present");
     check(strstr(out, "\"inputSchema\"") != NULL, "tool schemas advertised");
 
     // --- tools/call: app_detect list --------------------------------------
@@ -185,6 +203,132 @@ int main(void) {
     check(strstr(out, "- postgresql |") != NULL && strstr(out, "engine=postgres | port=5432 | sql") != NULL,
           "db bare list renders full table");
 
+    // --- tools/call: engine_list + app_list -------------------------------
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":100,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"engine_list\",\"arguments\":{}}}",
+        out, sizeof(out), "engine_list writes a response");
+    check(strstr(out, "ENGINES (20)") != NULL, "engine_list renders header");
+    check(strstr(out, "claude-code") != NULL && strstr(out, "copilot-cli") != NULL,
+          "engine_list covers first and last rows");
+    check(strstr(out, "\"isError\":true") == NULL, "engine_list is not an error");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":101,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"engine_list\",\"arguments\":{\"query\":\"codex\"}}}",
+        out, sizeof(out), "engine_list query writes a response");
+    check(strstr(out, "codex") != NULL, "engine_list query hits rows");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":102,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"app_list\",\"arguments\":{}}}",
+        out, sizeof(out), "app_list writes a response");
+    check(strstr(out, "APPS (29)") != NULL, "app_list renders header");
+    check(strstr(out, "apple-notes") != NULL && strstr(out, "imessage") != NULL,
+          "app_list covers first and last rows");
+    check(strstr(out, "\"isError\":true") == NULL, "app_list is not an error");
+
+    // --- tools/call: harness_run unbound degrade --------------------------
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":103,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"harness_run\",\"arguments\":{\"engine\":\"codex\","
+        "\"prompt\":\"hello\"}}}",
+        out, sizeof(out), "harness_run unbound writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "harness_run without a driver is an error");
+    check(strstr(out, "UNBOUND_DRIVER") != NULL,
+          "harness_run names the missing driver seam");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":104,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"harness_run\",\"arguments\":{\"engine\":\"nope\","
+        "\"prompt\":\"hello\"}}}",
+        out, sizeof(out), "harness_run unknown engine writes a response");
+    check(strstr(out, "unknown engine: nope") != NULL,
+          "harness_run names the unknown engine");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":105,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"harness_poll\",\"arguments\":{\"jobId\":99}}}",
+        out, sizeof(out), "harness_poll unknown job writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "harness_poll of an unknown job is an error");
+
+    // --- tools/call: app_action unbound degrade ----------------------------
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":106,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"app_action\",\"arguments\":{\"target\":"
+        "\"apple-notes\",\"action\":\"list-notes\"}}}",
+        out, sizeof(out), "app_action unbound writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "app_action without a driver is an error");
+    check(strstr(out, "UNBOUND_DRIVER") != NULL,
+          "app_action names the missing driver seam");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":107,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"app_action\",\"arguments\":{\"target\":\"nope\","
+        "\"action\":\"x\"}}}",
+        out, sizeof(out), "app_action unknown target writes a response");
+    check(strstr(out, "unknown target: nope") != NULL,
+          "app_action names the unknown target");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":108,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"app_poll\",\"arguments\":{\"jobId\":99}}}",
+        out, sizeof(out), "app_poll unknown job writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "app_poll of an unknown job is an error");
+
+    // --- tools/call: search_list + web_search -------------------------------
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":109,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"search_list\",\"arguments\":{}}}",
+        out, sizeof(out), "search_list writes a response");
+    check(strstr(out, "SEARCH PROVIDERS (3)") != NULL,
+          "search_list renders header");
+    check(strstr(out, "searxng") != NULL && strstr(out, "wikimedia") != NULL,
+          "search_list covers first and last rows");
+    check(strstr(out, "\"isError\":true") == NULL,
+          "search_list is not an error");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":110,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"web_search\",\"arguments\":{}}}",
+        out, sizeof(out), "web_search without query writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "web_search without a query is an error");
+    check(strstr(out, "missing query") != NULL,
+          "web_search names the missing query");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":111,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"web_search\",\"arguments\":{\"query\":\"x\","
+        "\"provider\":\"nope\"}}}",
+        out, sizeof(out), "web_search unknown provider writes a response");
+    check(strstr(out, "unknown search provider: nope") != NULL,
+          "web_search names the unknown provider");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":112,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"web_search\",\"arguments\":{\"query\":\"hi\","
+        "\"provider\":\"google-cse\"}}}",
+        out, sizeof(out), "web_search google without keys writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "web_search google without keys is an error");
+    check(strstr(out, "GOOGLE_CSE_KEY") != NULL ||
+              strstr(out, "TLS_BACKEND_MISSING") != NULL,
+          "web_search google names keys or the TLS gap");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":113,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"web_search\",\"arguments\":{\"query\":\"hi\"}}}",
+        out, sizeof(out), "web_search searxng writes a response");
+    check(strstr(out, "\"isError\":true") != NULL,
+          "web_search searxng with no local server is an error");
+    check(strstr(out, "transport error") != NULL,
+          "web_search searxng names the transport failure");
+
     // --- tools/call: unknown tool -----------------------------------------
     r = run(srv,
         "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\","
@@ -199,8 +343,11 @@ int main(void) {
         out, sizeof(out), "resources/list writes a response");
     check(strstr(out, "\"uri\":\"system://apps\"") != NULL &&
               strstr(out, "\"uri\":\"system://capture\"") != NULL &&
-              strstr(out, "\"uri\":\"db://data-sources\"") != NULL,
-          "all three resource URIs advertised");
+              strstr(out, "\"uri\":\"db://data-sources\"") != NULL &&
+              strstr(out, "\"uri\":\"engines://catalog\"") != NULL &&
+              strstr(out, "\"uri\":\"apps://catalog\"") != NULL &&
+              strstr(out, "\"uri\":\"search://providers\"") != NULL,
+          "all six resource URIs advertised");
     check(strstr(out, "\"mimeType\":\"text/plain\"") != NULL,
           "resources carry a mime type");
 
@@ -212,6 +359,27 @@ int main(void) {
           "resource read echoes the uri");
     check(strstr(out, "KNOWN APPS (14)") != NULL,
           "resource read renders the same body as the tool");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":116,\"method\":\"resources/read\","
+        "\"params\":{\"uri\":\"engines://catalog\"}}",
+        out, sizeof(out), "engines catalog read writes a response");
+    check(strstr(out, "ENGINES (20)") != NULL,
+          "engines catalog renders the directory");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":117,\"method\":\"resources/read\","
+        "\"params\":{\"uri\":\"apps://catalog\"}}",
+        out, sizeof(out), "apps catalog read writes a response");
+    check(strstr(out, "APPS (29)") != NULL,
+          "apps catalog renders the directory");
+
+    r = run(srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":118,\"method\":\"resources/read\","
+        "\"params\":{\"uri\":\"search://providers\"}}",
+        out, sizeof(out), "search providers read writes a response");
+    check(strstr(out, "SEARCH PROVIDERS (3)") != NULL,
+          "search providers read renders the directory");
 
     r = run(srv,
         "{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"resources/read\","
