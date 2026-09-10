@@ -34,6 +34,8 @@ add_library(api_haven STATIC
     src/ai/ai_provider.c
     src/ai/ai_chat.c
     src/database/db_provider.c
+    src/harness/engine_provider.c
+    src/harness/harness.c
     src/mcp/mcp_server.c
 )
 target_include_directories(api_haven PUBLIC src)
