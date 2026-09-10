@@ -10,7 +10,7 @@ import primitive.string;
 import telemetry.CrashDumper;
 
 /**
- * High-performance, zero-allocation API Client for the Anti Engine ecosystem.
+ * High-performance, zero-allocation API Client for the Vex ecosystem.
  * Formulates off-heap JSON packets and transmits them over native sockets.
  */
 @Draft
