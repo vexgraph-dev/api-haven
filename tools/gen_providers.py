@@ -637,6 +637,16 @@ FOOTER = """};
 
 """
 
+# Quota columns (free-tier): unverified until per-provider numbers land —
+# emit zero/NULL defaults so -Wmissing-field-initializers stays clean.
+# Per-provider overrides go here (slug -> (quotaPerDay, authKind, licenseFamily)).
+QUOTA = {
+    "hugging-face": (1000, "HF_TOKEN bearer", "mixed-open"),
+    "groq": (14400, "GROQ_API_KEY bearer", "proprietary"),
+    "cloudflare": (0, "CLOUDFLARE_API_TOKEN bearer", "proprietary"),
+    "cloudflare-workers-ai": (10000, "CLOUDFLARE_API_TOKEN bearer", "proprietary"),
+}
+
 def emit(path, bucket, rows):
     out = []
     header = HEADER % {"bucket": bucket.title(), "path": path, "count": len(rows)}
@@ -646,6 +656,9 @@ def emit(path, bucket, rows):
     for (slug, name, family, auth, base, note, _region) in rows_sorted:
         base_lit = '"%s"' % base if base is not None else "NULL"
         note_lit = '"%s"' % note if note else "NULL"
+        quota_per_day, auth_kind, license_family = QUOTA.get(slug, (0, None, None))
+        auth_kind_lit = '"%s"' % auth_kind if auth_kind is not None else "NULL"
+        license_lit = '"%s"' % license_family if license_family is not None else "NULL"
         out.append("    {\n"
                    "        \"%s\",\n"
                    "        \"%s\",\n"
@@ -654,7 +667,13 @@ def emit(path, bucket, rows):
                    "        %s,\n"
                    "        %s,\n"
                    "        %s,\n"
-                   "    }," % (slug, name, base_lit, family, auth, "AI_PROVIDER_REGION_" + bucket.upper() if False else _region, note_lit))
+                   "        %u,\n"
+                   "        %u,\n"
+                   "        %d,\n"
+                   "        %s,\n"
+                   "        %s,\n"
+                   "    }," % (slug, name, base_lit, family, auth, "AI_PROVIDER_REGION_" + bucket.upper() if False else _region, note_lit,
+                               quota_per_day, 0, 0, auth_kind_lit, license_lit))
     out.append(FOOTER)
     with open(path, "w") as f:
         f.write("\n".join(out))

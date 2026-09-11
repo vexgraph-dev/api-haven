@@ -22,16 +22,27 @@
  *   uint32_t reserved;   // singleton marker; no mutable state — all data
  *                        // lives in the static const AiProviderSlot rows
  *
- * SLOT RECORD (AiProviderSlot — Rule 3 co-location, zero behavior of its own:
- * all query behavior hangs off this table class):
- * ----------------------------------------------------------------------------
- *   const char *slug;         // canonical key, e.g. "openai", "deepseek"
- *   const char *displayName;  // human label, master list verbatim
- *   const char *baseUrl;      // verified native endpoint; NULL = unverified
- *   AiProviderFamily family;  // wire contract enum
- *   AiProviderAuth   auth;    // credential scheme enum
- *   AiProviderRegion region;  // region bucket enum
- *   const char *note;         // caveat / variant note; NULL when none
+  * SLOT RECORD (AiProviderSlot — Rule 3 co-location, zero behavior of its own:
+  * all query behavior hangs off this table class):
+  * ----------------------------------------------------------------------------
+  *   const char *slug;         // canonical key, e.g. "openai", "deepseek"
+  *   const char *displayName;  // human label, master list verbatim
+  *   const char *baseUrl;      // verified native endpoint; NULL = unverified
+  *   AiProviderFamily family;  // wire contract enum
+  *   AiProviderAuth   auth;    // credential scheme enum
+  *   AiProviderRegion region;  // region bucket enum
+  *   const char *note;         // caveat / variant note; NULL when none
+  *   uint32_t quotaPerDay;     // free-tier requests/day (0 = unknown)
+  *   uint32_t quotaRemaining;  // free-tier remainder (0 = unknown/exhausted)
+  *   int64_t  resetUnix;       // quota window reset epoch secs (0 = unknown)
+  *   const char *authKind;     // credential kind label; NULL = see auth
+  *   const char *licenseFamily;// license family label; NULL = UNKNOWN
+  *
+  * Quota columns (tools/gen_providers.py QUOTA table): HF/Groq/Cloudflare
+  * rows carry first-pass quotaPerDay/authKind/licenseFamily values; every
+  * other generated row reads 0/NULL (unknown) until verified per-provider
+  * numbers land. Supabase/Neon are database rows (db_provider.c), not AI
+  * rows — their quotas belong to the database catalog when it gains them.
  *
  * PRIVATE HELPERS (generated data fragments — each row carries exactly the
  * SLOT RECORD fields above; fragments are included ONLY by this file):
@@ -53,9 +64,10 @@
  *   - AiProvider_get(self, slug)            : row by slug (linear scan)
  *   - AiProvider_resolveBaseUrl(self, slot) : baseUrl or family default
  *
- * Getters (Rule 24; null-safe. Setters omitted — immutable rows, waiver):
- *   - AiProvider_getSlug / getDisplayName / getBaseUrl / getFamily /
- *     getAuth / getRegion / getNote(self, slot)
+  * Getters (Rule 24; null-safe. Setters omitted — immutable rows, waiver):
+  *   - AiProvider_getSlug / getDisplayName / getBaseUrl / getFamily /
+  *     getAuth / getRegion / getNote / getQuotaPerDay / getQuotaRemaining /
+  *     getResetUnix / getAuthKind / getLicenseFamily(self, slot)
  * ============================================================================
  */
 ;;INTENTION("slot records decomposed into per-region .inc fragments for mechanical maintainability; included only by ai_provider.c — Rule 3 managed exception")
@@ -180,4 +192,32 @@ AiProviderRegion AiProvider_getRegion(const AiProvider *self, const AiProviderSl
 const char *AiProvider_getNote(const AiProvider *self, const AiProviderSlot *slot) {
     (void)self;
     return slot ? (*slot).note : NULL;
+}
+
+uint32_t AiProvider_getQuotaPerDay(const AiProvider *self, const AiProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).quotaPerDay;
+}
+
+uint32_t AiProvider_getQuotaRemaining(const AiProvider *self, const AiProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).quotaRemaining;
+}
+
+int64_t AiProvider_getResetUnix(const AiProvider *self, const AiProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).resetUnix;
+}
+
+const char *AiProvider_getAuthKind(const AiProvider *self, const AiProviderSlot *slot) {
+    (void)self;
+    return slot ? (*slot).authKind : NULL;
+}
+
+const char *AiProvider_getLicenseFamily(const AiProvider *self, const AiProviderSlot *slot) {
+    (void)self;
+    return slot ? (*slot).licenseFamily : NULL;
 }
