@@ -36,15 +36,25 @@
  *   uint32_t reserved;   // singleton marker; no mutable state — all data
  *                        // lives in the static const SearchProviderSlot rows
  *
- * SLOT RECORD (SearchProviderSlot — Rule 3 co-location, zero behavior of
- * its own; all query behavior hangs off this table class):
- * ----------------------------------------------------------------------------
- *   const char *slug;            // canonical key, e.g. "searxng"
- *   const char *displayName;     // human label
- *   SearchProviderFamily family; // wire family enum
- *   SearchProviderAuth   auth;   // credential scheme enum
- *   const char *endpoint;        // base URL the renderer builds on
- *   const char *note;            // caveat; NULL when none
+  * SLOT RECORD (SearchProviderSlot — Rule 3 co-location, zero behavior of
+  * its own; all query behavior hangs off this table class):
+  * ----------------------------------------------------------------------------
+  *   const char *slug;            // canonical key, e.g. "searxng"
+  *   const char *displayName;     // human label
+  *   SearchProviderFamily family; // wire family enum
+  *   SearchProviderAuth   auth;   // credential scheme enum
+  *   const char *endpoint;        // base URL the renderer builds on
+  *   const char *note;            // caveat; NULL when none
+  *   uint32_t quotaPerDay;        // free-tier requests/day (0 = unknown)
+  *   uint32_t quotaRemaining;     // free-tier remainder (0 = unknown)
+  *   int64_t  resetUnix;          // quota window reset epoch secs (0 = unknown)
+  *   const char *authKind;        // credential kind label; NULL = see auth
+  *   const char *licenseFamily;   // license family label; NULL = UNKNOWN
+  *
+  * TODO(quota): the 3 static rows below carry first-pass quota values
+  * (google-cse 100/day free tier, wikimedia CC-BY-SA, searxng unlimited
+  * self-hosted = 0/unknown). Refine per-backend numbers when verified,
+  * mirroring the AiProvider QUOTA table in tools/gen_providers.py.
  *
  * PRIVATE HELPERS (none — rows live in kSearchProviders[] below, each
  * row carrying exactly the SLOT RECORD fields above):
@@ -64,9 +74,10 @@
  *   - SearchProvider_get(self, slug)                 : row by slug
  *   - SearchProvider_resolveEndpoint(self, slot, dest) : endpoint copy
  *
- * Getters (Rule 24; null-safe. Setters omitted — immutable rows, waiver):
- *   - SearchProvider_getSlug / getDisplayName / getFamily / getAuth /
- *     getEndpoint / getNote(self, slot)
+  * Getters (Rule 24; null-safe. Setters omitted — immutable rows, waiver):
+  *   - SearchProvider_getSlug / getDisplayName / getFamily / getAuth /
+  *     getEndpoint / getNote / getQuotaPerDay / getQuotaRemaining /
+  *     getResetUnix / getAuthKind / getLicenseFamily(self, slot)
  * ============================================================================
  */
 ;;INTENTION("immutable slot records — setters omitted; data is static const; access via SearchProvider_* table functions — Rule 33 Tier-2 waiver")
@@ -76,15 +87,18 @@ static const SearchProviderSlot kSearchProviders[] = {
     {"searxng", "SearXNG (self-hosted)",
      SEARCH_FAMILY_SEARXNG, SEARCH_AUTH_NONE,
      "http://localhost:8888",
-     "self-hosted metasearch; base overridable per call; works today (http)"},
+     "self-hosted metasearch; base overridable per call; works today (http)",
+     0, 0, 0, NULL, NULL},
     {"google-cse", "Google Custom Search",
      SEARCH_FAMILY_GOOGLE_CSE, SEARCH_AUTH_KEY_CX,
      "https://www.googleapis.com",
-     "needs GOOGLE_CSE_KEY + GOOGLE_CSE_CX env; https needs TLS backend"},
+     "needs GOOGLE_CSE_KEY + GOOGLE_CSE_CX env; https needs TLS backend",
+     100, 0, 0, "GOOGLE_CSE_KEY+CX pair", "proprietary"},
     {"wikimedia", "Wikimedia",
      SEARCH_FAMILY_MEDIAWIKI, SEARCH_AUTH_NONE,
      "https://en.wikipedia.org",
-     "keyless MediaWiki API; https needs TLS backend"},
+     "keyless MediaWiki API; https needs TLS backend",
+     0, 0, 0, NULL, "CC-BY-SA"},
 };
 
 static const uint32_t kSearchProviderCount =
@@ -178,4 +192,37 @@ const char *SearchProvider_getNote(const SearchProvider *self,
                                    const SearchProviderSlot *slot) {
     (void)self;
     return slot ? (*slot).note : NULL;
+}
+
+uint32_t SearchProvider_getQuotaPerDay(const SearchProvider *self,
+                                       const SearchProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).quotaPerDay;
+}
+
+uint32_t SearchProvider_getQuotaRemaining(const SearchProvider *self,
+                                          const SearchProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).quotaRemaining;
+}
+
+int64_t SearchProvider_getResetUnix(const SearchProvider *self,
+                                    const SearchProviderSlot *slot) {
+    if (!self || !slot)
+        return 0;
+    return (*slot).resetUnix;
+}
+
+const char *SearchProvider_getAuthKind(const SearchProvider *self,
+                                       const SearchProviderSlot *slot) {
+    (void)self;
+    return slot ? (*slot).authKind : NULL;
+}
+
+const char *SearchProvider_getLicenseFamily(const SearchProvider *self,
+                                            const SearchProviderSlot *slot) {
+    (void)self;
+    return slot ? (*slot).licenseFamily : NULL;
 }

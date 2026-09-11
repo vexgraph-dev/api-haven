@@ -42,6 +42,11 @@ typedef struct SearchProviderSlot {
     SearchProviderAuth auth;      // credential scheme enum
     const char *endpoint;     // base URL the renderer builds on
     const char *note;         // caveat; NULL when none
+    uint32_t quotaPerDay;     // free-tier requests/day (0 = unknown)
+    uint32_t quotaRemaining;  // free-tier remainder (0 = unknown/exhausted)
+    int64_t resetUnix;        // quota window reset epoch secs (0 = unknown)
+    const char *authKind;     // credential kind label; NULL = see auth enum
+    const char *licenseFamily; // license family label; NULL = UNKNOWN
 } SearchProviderSlot;
 
 // The table class — a singleton handle; state lives in the static const
@@ -80,5 +85,15 @@ const char *SearchProvider_getEndpoint(const SearchProvider *self,
                                        const SearchProviderSlot *slot);
 const char *SearchProvider_getNote(const SearchProvider *self,
                                    const SearchProviderSlot *slot);
+uint32_t SearchProvider_getQuotaPerDay(const SearchProvider *self,
+                                       const SearchProviderSlot *slot);
+uint32_t SearchProvider_getQuotaRemaining(const SearchProvider *self,
+                                          const SearchProviderSlot *slot);
+int64_t SearchProvider_getResetUnix(const SearchProvider *self,
+                                    const SearchProviderSlot *slot);
+const char *SearchProvider_getAuthKind(const SearchProvider *self,
+                                       const SearchProviderSlot *slot);
+const char *SearchProvider_getLicenseFamily(const SearchProvider *self,
+                                            const SearchProviderSlot *slot);
 
 #endif
