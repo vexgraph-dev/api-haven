@@ -29,6 +29,7 @@ add_library(api_haven STATIC
     src/api/client.c
     src/api/auth.c
     src/api/rest.c
+    src/api/haven_ws_fanout.c
     src/com/discord/discord.c
     src/com/slack/slack.c
     src/ai/ai_provider.c
